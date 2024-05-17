@@ -1,0 +1,37 @@
+
+- Propose a design for implementing copy-on-write shared mappings
+
+Shared mappings are intended to have changes be reflected across processes. Namely, if one process
+writes to those mapped areas, then it should be reflected in other processes that have mapped the same 
+shared area. Copy-on-write seems like it would counter this intended behavior. Perhaps there are some use
+cases, maybe if we are creating a process that exeutes depending on another. Regardless, we can implement it.
+
+To explain how to do copy-on-write for shared mappings, we first have to consider COW for private mappings.
+If we have a process that privately maps a region and then does some changes to it and then finally forks it,
+we want to use the same page for both the parent and child processes until one of them writes to that page. 
+To implement such behavior, we can have both of the page table entries point to the same physical page and then 
+mark both page table entries to be read-only. Then when the user tries to write to that page, they will page fault
+and we can then make a copy of the page and provide a page to the user.
+
+Now, there are some clear problems with this. First off, we need to deallocate pages when we are done with them, 
+but we now are sharing pages between processes, so we need some way of reference counting for each physical page.
+We could either have a bunch of counts for each physical page, or if use the PMAP described in class, we could use 
+the number of elements in the list for a physical page as the reference count. Only when the count hits 0 do we want 
+to dealloc the page (for safety). This of course has to be protected from race conditions and thus needs locks and the like.
+
+We can distinguish a COW page from a Read only page by looking at the mmap region metadata, that should store whether the 
+page is supposed to be read only or read-write. If it is read-write and our PTE is read-only, then we know that we have a COW case
+and do as I described earlier. Of course there are numerous optimizations you can do here. For example, if we have the 
+memory regions defined by mmap, we can lazily COW the page tables themselves to save memory there. 
+
+If we want to copy-on-write for shared mappings, we simply need to mark those shared pages as read only and let this mechanism 
+take care of the rest.
+
+
+
+If the question was asking about how to copy-on-write the share mapping entries, then we can leverage the page cache.
+The page cache has to keep some data structure that tracks which files (anonymous and named) and which pages of those files
+are in memory. Hence, when we fork, we don't have to copy the shared maps at all. We can simply allow the user to page fault 
+at those addresses and when they do, ask the page cache for the corresponding page (and if the page cache is implemented with
+something like a hashtable, then it will be very fast), and register it into the page table then. This is effectively lazily 
+mapping the shared pages
